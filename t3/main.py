@@ -1,161 +1,91 @@
 import os
-import base64
-import tempfile
-from typing import List, Dict
-from pymongo import MongoClient
-from langchain_groq import ChatGroq
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_community.document_loaders import PyPDFLoader
-from langchain_community.vectorstores import MongoDBAtlasVectorSearch
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_core.messages import HumanMessage, AIMessage
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnablePassthrough
-from pdf2image import convert_from_path
-from dotenv import load_dotenv
+from flask import Flask, request, jsonify, send_from_directory
+from werkzeug.utils import secure_filename
+from flask_cors import CORS
+from script import PDFProcessor, NormalDBManager, GroqChatbot, load_collections, save_collections
 
-load_dotenv()
+UPLOAD_FOLDER = 'uploads'
+STATIC_FOLDER = '.'
 
-class PDFProcessor:
-    def __init__(self):
-        self.groq_vision = ChatGroq(
-            temperature=0.2,
-            model="llava-1.5-7b-hf"
-        )
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+os.makedirs('page_images', exist_ok=True)
+os.makedirs('extracted_page_images', exist_ok=True)
+os.makedirs('extracted_pages', exist_ok=True)
 
-    def process_pdf(self, pdf_path: str) -> List[Dict]:
-        """Extract text and images from PDF, process with Groq vision"""
-        documents = []
+app = Flask(__name__, static_folder=STATIC_FOLDER)
+CORS(app)
 
-        # Extract text
-        loader = PyPDFLoader(pdf_path)
-        pages = loader.load()
+pdf_processor = PDFProcessor()
+db_manager = NormalDBManager()
+chatbot = GroqChatbot(db_manager)
 
-        # Extract images and convert to text
-        images = convert_from_path(pdf_path)
-        for i, (page, image) in enumerate(zip(pages, images)):
-            # Convert image to base64
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as buffered:
-                image.save(buffered, format="JPEG")
-                buffered.seek(0)
-                base64_image = base64.b64encode(buffered.read()).decode('utf-8')
+collections_meta = load_collections()
 
-            # Get image description from Groq
-            vision_response = self.groq_vision.invoke([
-                HumanMessage(content=[
-                    {"type": "text", "text": "Describe this image in detail for OCR purposes"},
-                    {"type": "image_url", "image_url": {
-                        "url": f"data:image/jpeg;base64,{base64_image}"
-                    }}
-                ])
-            ])
+@app.route('/health', methods=['GET'])
+def health():
+    return jsonify({'status': 'ok'}), 200
 
-            # Combine text and image description
-            combined_content = f"{page.page_content}\n[Image Description: {vision_response.content}]"
-            documents.append({
-                "page_content": combined_content,
-                "metadata": {
-                    "source": pdf_path,
-                    "page": i+1,
-                    "images_processed": True
-                }
-            })
+@app.route('/upload', methods=['POST'])
+def upload_pdf():
+    try:
+        file = request.files['file']
+        if not file:
+            return jsonify({'error': 'No file uploaded'}), 400
+        filename = secure_filename(file.filename)
+        pdf_path = os.path.join(UPLOAD_FOLDER, filename)
+        file.save(pdf_path)
+        collection_name = os.path.splitext(filename)[0]
+        documents, chunk_topics = pdf_processor.process_pdf(pdf_path)
+        db_manager.store_documents(documents, collection_name)
+        collections_meta[collection_name] = {
+            "pdf_path": pdf_path,
+            "topics": sorted(list(set(chunk_topics)))
+        }
+        save_collections(collections_meta)
+        return jsonify({'collection': collection_name, 'topics': chunk_topics})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
-        return documents
+@app.route('/collections', methods=['GET'])
+def get_collections():
+    collections_meta = load_collections()
+    return jsonify(list(collections_meta.keys()))
 
-class VectorDBManager:
-    def __init__(self):
-        self.client = MongoClient(os.getenv("MONGODB_URI"))
-        self.db = self.client["ncert_chatbot"]
-        # Use Hugging Face all-MiniLM-L6-v2 embeddings
-        self.embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+@app.route('/collection/<name>/topics', methods=['GET'])
+def get_topics(name):
+    collections_meta = load_collections()
+    topics = collections_meta.get(name, {}).get('topics', [])
+    return jsonify(topics)
 
-    def store_documents(self, documents: List[Dict], collection_name: str):
-        """Store documents in MongoDB with vector embeddings"""
-        collection = self.db[collection_name]
-        vector_store = MongoDBAtlasVectorSearch(
-            collection=collection,
-            embedding=self.embeddings,
-            index_name="ncert_index"
-        )
-        vector_store.add_documents(documents)
+@app.route('/chat', methods=['POST'])
+def chat():
+    try:
+        data = request.json
+        collection = data['collection']
+        question = data['question']
+        answer = chatbot.generate_response(question, collection)
+        last = chatbot.memory[-1] if chatbot.memory else {}
+        context = last.get('context', '')
+        relevant_chunks = db_manager.get_chunks(collection)
+        used_pages = set()
+        used_images = set()
+        for chunk in relevant_chunks:
+            if chunk['chunk'] in context:
+                used_pages.add(chunk['page'])
+                used_images.add(chunk['img_path'])
+        image_urls = [f"/static/{img_path.replace(os.sep, '/')}" for img_path in used_images]
+        return jsonify({
+            'answer': answer,
+            'context': context,
+            'images': image_urls,
+            'pages': sorted(list(used_pages))
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
-class Chatbot:
-    def __init__(self):
-        self.llm = ChatGroq(
-            temperature=0.7,
-            model="meta-llama/llama-4-scout-17b-16e-instruct"
-        )
-        self.memory = []
-        self.vector_db = VectorDBManager()
+@app.route('/static/<path:filename>')
+def serve_static(filename):
+    return send_from_directory('.', filename)
 
-    def create_retriever(self, collection_name: str):
-        """Create vector store retriever"""
-        collection = self.vector_db.db[collection_name]
-        return MongoDBAtlasVectorSearch(
-            collection=collection,
-            embedding=self.vector_db.embeddings,
-            index_name="ncert_index"
-        ).as_retriever(search_kwargs={"k": 3})
-
-    def generate_response(self, query: str, collection_name: str):
-        """Generate response using RAG and conversation history"""
-        retriever = self.create_retriever(collection_name)
-
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are a helpful NCERT textbook assistant. Use the context to answer questions.
-            Context: {context}
-            Conversation History: {history}"""),
-            ("user", "{question}")
-        ])
-
-        chain = (
-            {"context": retriever, "question": RunnablePassthrough(), "history": lambda x: self.memory}
-            | prompt
-            | self.llm
-            | StrOutputParser()
-        )
-
-        response = chain.invoke(query)
-        self.memory.extend([
-            HumanMessage(content=query),
-            AIMessage(content=response)
-        ])
-        return response
-
-def main():
-    pdf_processor = PDFProcessor()
-    db_manager = VectorDBManager()
-    chatbot = Chatbot()
-
-    while True:
-        print("\n1. Process PDF\n2. Ask Question\n3. Exit")
-        choice = input("Enter choice: ")
-
-        if choice == "1":
-            pdf_path = input("Enter PDF path: ")
-            if not os.path.exists(pdf_path):
-                print("Invalid path")
-                continue
-
-            collection_name = os.path.basename(pdf_path).split('.')[0]
-            print("Processing PDF, this may take a while...")
-            documents = pdf_processor.process_pdf(pdf_path)
-            db_manager.store_documents(documents, collection_name)
-            print(f"Processed {len(documents)} pages into collection '{collection_name}'")
-
-        elif choice == "2":
-            collection_name = input("Enter PDF collection name: ")
-            query = input("Your question: ")
-            response = chatbot.generate_response(query, collection_name)
-            print("\nAssistant:", response)
-
-        elif choice == "3":
-            print("Exiting...")
-            break
-
-        else:
-            print("Invalid choice")
-
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    app.run(debug=True, port=5000)
