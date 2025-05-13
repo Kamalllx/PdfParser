@@ -1,0 +1,20 @@
+# Core requirements
+python-dotenv==1.0.0
+rich==13.5.2
+termcolor==2.3.0
+
+# MongoDB
+pymongo==4.5.0
+
+# LangChain
+langchain==0.1.8
+langchain-core==0.1.19
+langchain-groq==0.0.9
+langchain-community==0.0.19
+
+# PDF Processing
+PyMuPDF==1.23.5
+Pillow==10.0.1
+
+# Embeddings and Vector Search
+langchain-mongodb==0.0.4
