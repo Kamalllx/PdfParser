@@ -1,0 +1,126 @@
+# Compiled source #
+###################
+*.com
+*.class
+*.dll
+*.exe
+*.o
+*.so
+*.out
+
+# Packages #
+############
+*.7z
+*.dmg
+*.gz
+*.iso
+*.jar
+*.rar
+*.tar
+*.zip
+
+# Logs and databases #
+######################
+*.log
+*.sql
+*.sqlite
+*.db
+
+# OS generated files #
+######################
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# IDEs and editors #
+####################
+.vscode/
+.idea/
+*.sublime-workspace
+*.sublime-project
+*.code-workspace
+
+# Node.js #
+###########
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Python #
+##########
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg
+*.egg-info/
+dist/
+build/
+.env
+
+# Ruby #
+########
+*.gem
+*.rbc
+.bundle/
+log/
+tmp/
+
+# Java #
+########
+*.class
+*.jar
+*.war
+*.ear
+target/
+
+# C/C++ #
+#########
+*.obj
+*.exe
+*.out
+*.app
+*.i
+*.pch
+*.pdb
+*.mod
+*.a
+*.lib
+
+# Other #
+#########
+.env
+*.swp
+*.bak
+*.tmp
+*.orig
+*.rej
+
+# Git itself #
+##############
+*.orig
+*.rej
+*.patch
+*.diff
+
+# Coverage reports #
+####################
+coverage/
+*.lcov
+*.nyc_output/
+
+# Dependency directories #
+##########################
+vendor/
+bower_components/
+
+# Custom files #
+################
+.secret
+local.settings.json
