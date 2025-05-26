@@ -1,0 +1,10 @@
+PyPDF2
+pymupdf
+langchain
+langchain-community
+langchain-groq
+python-dotenv
+pymongo
+flask
+flask-cors
+werkzeug
